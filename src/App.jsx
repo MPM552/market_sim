@@ -33,9 +33,7 @@ export default function App() {
   const [tradeQty, setTradeQty] = useState(10);
   const [trades, setTrades] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(120); // ms per bar
-  const [showEventModal, setShowEventModal] = useState(false);
-  const [pendingEvents, setPendingEvents] = useState([]);
+  const [speed, setSpeed] = useState(1200); // ms per bar — 1× is leisurely trading pace
   const [activeEvent, setActiveEvent] = useState(null);
   const [notification, setNotification] = useState(null);
   const [tab, setTab] = useState("chart");
@@ -72,22 +70,7 @@ export default function App() {
   const advance = useCallback(() => {
     if (barIndex >= TOTAL_BARS - 1) { setIsPlaying(false); return; }
     const nextIndex = barIndex + 1;
-    const nextBar = HOURLY_DATA[nextIndex];
     setBarIndex(nextIndex);
-
-    // Fire event modal once per event date (on the first bar that carries the event)
-    if (nextBar.events?.length > 0) {
-      const evDate = nextBar.date;
-      setSeenEventDates(prev => {
-        if (prev.has(evDate)) return prev;
-        const next = new Set(prev);
-        next.add(evDate);
-        setIsPlaying(false);
-        setPendingEvents(nextBar.events);
-        setShowEventModal(true);
-        return next;
-      });
-    }
   }, [barIndex]);
 
   useEffect(() => {
@@ -103,7 +86,6 @@ export default function App() {
     setShares(s => s + tradeQty);
     setTrades(t => [...t, { key: currentBar.key, date: currentBar.date, hour: currentBar.hour, type: "BUY", qty: tradeQty, price: currentPrice }]);
     showNotif(`Bought ${tradeQty} @ $${currentPrice.toFixed(2)}`, "success");
-    setShowEventModal(false);
   };
 
   const sell = () => {
@@ -112,12 +94,11 @@ export default function App() {
     setShares(s => s - tradeQty);
     setTrades(t => [...t, { key: currentBar.key, date: currentBar.date, hour: currentBar.hour, type: "SELL", qty: tradeQty, price: currentPrice }]);
     showNotif(`Sold ${tradeQty} @ $${currentPrice.toFixed(2)}`, "success");
-    setShowEventModal(false);
   };
 
   const reset = () => {
     setBarIndex(0); setCash(START_CASH); setShares(0); setTrades([]);
-    setIsPlaying(false); setShowEventModal(false); setSeenEventDates(new Set());
+    setIsPlaying(false); setSeenEventDates(new Set());
   };
 
   // Nearby events within ±3 trading days (±21 bars)
@@ -160,42 +141,6 @@ export default function App() {
     <div className="app">
       {notification && (
         <div className={`notification notif-${notification.type}`}>{notification.msg}</div>
-      )}
-
-      {/* Event interrupt modal */}
-      {showEventModal && pendingEvents.length > 0 && (
-        <div className="modal-overlay" onClick={() => setShowEventModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span className="modal-tag">📰 MARKET EVENT</span>
-              <span className="modal-date">{formatDate(pendingEvents[0].date)}</span>
-            </div>
-            {pendingEvents.map((ev, i) => (
-              <div key={i} className="modal-event">
-                <div className="modal-event-type" style={{ color: EVENT_TYPES[ev.type]?.color }}>
-                  {EVENT_TYPES[ev.type]?.icon} {EVENT_TYPES[ev.type]?.label}
-                  <span className="severity-badge" style={{ background: SEVERITY_COLORS[ev.severity] }}>{ev.severity}</span>
-                </div>
-                <div className="modal-event-title">{ev.title}</div>
-                <div className="modal-event-desc">{ev.description}</div>
-                <div className="modal-factors">
-                  {ev.affectedFactors.map((f, j) => <span key={j} className="factor-tag">{f}</span>)}
-                </div>
-              </div>
-            ))}
-            <div className="modal-actions">
-              <button className="btn btn-buy" onClick={buy} disabled={currentPrice * tradeQty > cash}>
-                🟢 Buy {tradeQty}
-              </button>
-              <button className="btn btn-sell" onClick={sell} disabled={tradeQty > shares}>
-                🔴 Sell {tradeQty}
-              </button>
-              <button className="btn btn-neutral" onClick={() => setShowEventModal(false)}>
-                ⏸ Hold — Continue
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Event detail modal */}
@@ -285,18 +230,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Time-of-day bar indicator */}
-              <div className="intraday-strip">
-                {["9:30","10:30","11:30","12:30","13:30","14:30","15:30"].map(h => (
-                  <div
-                    key={h}
-                    className={`intraday-slot ${currentBar.hour === h ? "active" : ""}`}
-                  >
-                    {h}
-                  </div>
-                ))}
-              </div>
-
               {/* Playback controls */}
               <div className="playback">
                 <button className="btn btn-sm" onClick={() => setBarIndex(i => Math.max(0, i - 1))} disabled={barIndex === 0}>‹</button>
@@ -312,7 +245,7 @@ export default function App() {
               {/* Speed selector */}
               <div className="speed-row">
                 <span className="speed-label">Speed</span>
-                {[{ label: "0.5×", ms: 240 }, { label: "1×", ms: 120 }, { label: "2×", ms: 60 }, { label: "5×", ms: 24 }, { label: "10×", ms: 10 }].map(s => (
+                {[{ label: "0.5×", ms: 2400 }, { label: "1×", ms: 1200 }, { label: "2×", ms: 600 }, { label: "5×", ms: 240 }, { label: "10×", ms: 120 }].map(s => (
                   <button
                     key={s.ms}
                     className={`btn btn-xs ${speed === s.ms ? "speed-active" : ""}`}
@@ -412,20 +345,32 @@ export default function App() {
               <button className="btn btn-xs" onClick={() => setTradeQty(Math.max(1, maxBuy))}>Max</button>
             </div>
           </div>
+        </div>
+      </div>
 
-          <div className="card">
-            <div className="card-title">🔍 Nearby Events</div>
-            {nearbyEvents.length === 0 && <div className="empty-sm">No nearby events</div>}
-            {nearbyEvents.map((e, i) => (
-              <div key={i} className="nearby-event" onClick={() => setActiveEvent(e)}>
-                <span>{EVENT_TYPES[e.type]?.icon}</span>
-                <div>
-                  <div className="nearby-title">{e.title}</div>
-                  <div className="nearby-date">{formatDate(e.date)}</div>
-                </div>
+      {/* Recent Events — full width below the main layout */}
+      <div className="recent-events-panel">
+        <div className="recent-events-header">
+          <span className="card-title" style={{ marginBottom: 0 }}>📰 Recent Events</span>
+          <span className="recent-events-count">{seenEvents.length} logged</span>
+        </div>
+        {seenEvents.length === 0 && (
+          <div className="empty-state" style={{ padding: "20px" }}>No events yet — advance time to reveal macro catalysts.</div>
+        )}
+        <div className="recent-events-grid">
+          {seenEvents.slice(0, 12).map((e, i) => (
+            <div key={i} className="recent-event-card" onClick={() => setActiveEvent(e)}>
+              <div className="rec-event-top">
+                <span className="rec-event-icon">{EVENT_TYPES[e.type]?.icon}</span>
+                <span className="severity-badge" style={{ background: SEVERITY_COLORS[e.severity] }}>{e.severity}</span>
               </div>
-            ))}
-          </div>
+              <div className="rec-event-title">{e.title}</div>
+              <div className="rec-event-meta">
+                <span style={{ color: EVENT_TYPES[e.type]?.color }}>{EVENT_TYPES[e.type]?.label}</span>
+                <span>{formatDate(e.date)}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

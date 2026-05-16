@@ -432,6 +432,72 @@ body {
 .nearby-title { font-size: 11px; color: var(--text); }
 .nearby-date { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 
+/* ─── Recent Events panel (full width below layout) ─── */
+.recent-events-panel {
+  margin-top: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px 16px;
+}
+
+.recent-events-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.recent-events-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.recent-events-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.recent-event-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.recent-event-card:hover {
+  border-color: var(--border2);
+  background: #152035;
+}
+
+.rec-event-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.rec-event-icon { font-size: 16px; }
+
+.rec-event-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.rec-event-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 /* ─── Modal ─── */
 .modal-overlay {
   position: fixed;
