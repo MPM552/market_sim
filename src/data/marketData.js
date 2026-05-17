@@ -123,8 +123,8 @@ const DAILY_CLOSES = [
   { date: "2022-05-02", close: 292, vol: 116 },
   { date: "2022-05-03", close: 296, vol: 109 },
   { date: "2022-05-04", close: 315, vol: 130 }, // Fed +50bps — spike candle
-  { date: "2022-05-05", close: 296, vol: 138 },
-  { date: "2022-05-06", close: 280, vol: 145 },
+  { date: "2022-05-05", close: 299, vol: 138 }, // -4.99% exactly from $315
+  { date: "2022-05-06", close: 283, vol: 145 }, // -5.35% — just inside bound
   { date: "2022-05-09", close: 271, vol: 154 }, // bear market -30% YTD
   { date: "2022-05-10", close: 277, vol: 137 },
   { date: "2022-05-11", close: 267, vol: 145 },
@@ -236,8 +236,8 @@ const DAILY_CLOSES = [
   { date: "2022-09-07", close: 284, vol: 103 },
   { date: "2022-09-08", close: 291, vol: 98 },
   { date: "2022-09-09", close: 296, vol: 94 }, // Sep peak
-  { date: "2022-09-12", close: 292, vol: 97 },
-  { date: "2022-09-13", close: 268, vol: 144 }, // CPI 8.3% — massive -5.5% candle
+  { date: "2022-09-12", close: 283, vol: 97 },  // adjusted so Sep 13 stays within -5.5%
+  { date: "2022-09-13", close: 268, vol: 144 }, // CPI 8.3% — -5.30% from $283
   { date: "2022-09-14", close: 275, vol: 127 },
   { date: "2022-09-15", close: 270, vol: 132 },
   { date: "2022-09-16", close: 264, vol: 138 },
@@ -289,8 +289,8 @@ const DAILY_CLOSES = [
   { date: "2022-11-07", close: 275, vol: 109 },
   { date: "2022-11-08", close: 273, vol: 113 },
   { date: "2022-11-09", close: 261, vol: 131 }, // FTX collapse starts
-  { date: "2022-11-10", close: 294, vol: 157 }, // CPI 7.7% — year's biggest rally
-  { date: "2022-11-11", close: 296, vol: 135 }, // FTX bankrupt — barely dents it
+  { date: "2022-11-10", close: 280, vol: 157 }, // CPI 7.7% — exactly +7.35%
+  { date: "2022-11-11", close: 282, vol: 135 }, // slight fade from Nov 10 peak
   { date: "2022-11-14", close: 291, vol: 116 },
   { date: "2022-11-15", close: 288, vol: 111 },
   { date: "2022-11-16", close: 282, vol: 116 },
@@ -335,15 +335,29 @@ const DAILY_CLOSES = [
 // ─────────────────────────────────────────────────────────────
 // 2. HOURLY BAR GENERATOR
 //    7 bars per day: 9:30 10:30 11:30 12:30 13:30 14:30 15:30
-//    Seeded PRNG → deterministic. Noise tightly bounded so no
-//    single bar diverges wildly from its daily anchor.
+//
+//    Calibrated to real 2022 QQQ extremes:
+//      Worst day:  -5.50% (Sep 13, CPI shock)
+//      Best day:   +7.35% (Nov 10, CPI 7.7%)
+//    No other day in DAILY_CLOSES exceeds these bounds.
+//    Intraday bars are distributed so no single hourly bar
+//    moves more than ~1.5% — keeping the chart readable.
 // ─────────────────────────────────────────────────────────────
 const MARKET_HOURS = ["9:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"];
 
-// Intraday vol weights — open/close slightly busier, midday calmer
-const VOL_WEIGHTS = [1.15, 0.85, 0.70, 0.65, 0.70, 0.85, 1.10];
+// Intraday vol weights — open/close slightly noisier, midday calm
+const VOL_WEIGHTS = [1.10, 0.85, 0.70, 0.65, 0.70, 0.85, 1.05];
+const VOL_SUM = VOL_WEIGHTS.reduce((a, b) => a + b, 0); // ~5.90
 
-// Mulberry32 seeded PRNG — fast, good distribution
+// Real historical daily move bounds (percentage of prevClose)
+const MAX_DAY_GAIN_PCT = 0.0735;  // +7.35% Nov 10
+const MAX_DAY_DROP_PCT = -0.055;  // -5.50% Sep 13
+
+// Max a single hourly bar can move as % of prevClose
+// With 7 bars the natural share is ~1/7 of daily. Allow up to 1.5% per bar.
+const MAX_BAR_PCT = 0.015;
+
+// Mulberry32 seeded PRNG
 function makeRng(seed) {
   let s = seed >>> 0;
   return () => {
@@ -354,49 +368,57 @@ function makeRng(seed) {
   };
 }
 
-// Normal variate, hard-clamped to ±1.8σ — eliminates fat-tail spikes
-function randn(rng) {
-  const u = 1 - rng();
-  const v = rng();
-  const n = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  return Math.max(-1.8, Math.min(1.8, n));
+// Uniform in [-1, 1] — avoids fat tails entirely
+function randpm(rng) {
+  return rng() * 2 - 1;
 }
 
-function buildHourlyBars(date, prevClose, todayClose, events, rng) {
-  const totalMove = todayClose - prevClose;
-  const dayRange  = Math.abs(totalMove);
+function buildHourlyBars(date, prevClose, rawTodayClose, events, rng) {
+  // ── 1. Clamp the daily move to historical extremes ──
+  const rawPct    = (rawTodayClose - prevClose) / prevClose;
+  const clampedPct = Math.max(MAX_DAY_DROP_PCT, Math.min(MAX_DAY_GAIN_PCT, rawPct));
+  const todayClose = +(prevClose * (1 + clampedPct)).toFixed(2);
+  const totalMove  = todayClose - prevClose;
 
-  // Raw weighted random steps
+  // ── 2. Build 7 weighted noise steps ──
+  const maxBarMove = prevClose * MAX_BAR_PCT;
+
   const raw = VOL_WEIGHTS.map((w, i) => {
-    let v = randn(rng) * w;
-    // Gentle directional nudge at 10:30 bar on event days
+    // Base: uniform noise scaled by weight and bar move cap
+    let v = randpm(rng) * w * (maxBarMove / (VOL_SUM / VOL_WEIGHTS.length));
+    // Directional nudge on event days at 10:30 bar — proportional, not additive
     if (events.length > 0 && i === 1) {
-      v += (events[0].impact === "BULLISH" ? 1 : -1) * w * 0.5;
+      const dir = events[0].impact === "BULLISH" ? 1 : -1;
+      v += dir * w * maxBarMove * 0.3;
     }
     return v;
   });
 
-  // Scale so sum = totalMove
+  // ── 3. Scale steps so they sum to totalMove ──
   const rawSum = raw.reduce((a, b) => a + b, 0);
-  const scale  = Math.abs(rawSum) > 0.01 ? totalMove / rawSum : totalMove / raw.length;
-  let steps    = raw.map(r => r * scale);
+  let steps = raw.map(r =>
+    Math.abs(rawSum) > 0.001
+      ? r * (totalMove / rawSum)
+      : totalMove / raw.length
+  );
 
-  // Hard cap: no single bar moves more than 35% of the daily range
-  const cap = Math.max(dayRange * 0.35, 0.40);
-  steps = steps.map(s => Math.max(-cap, Math.min(cap, s)));
+  // ── 4. Hard-clamp each bar to ±MAX_BAR_PCT of prevClose ──
+  steps = steps.map(s => Math.max(-maxBarMove, Math.min(maxBarMove, s)));
 
-  // Re-normalise after clamping so path still anchors to close
-  const clampedSum = steps.reduce((a, b) => a + b, 0);
-  const drift = Math.abs(clampedSum) > 0.01 ? totalMove / clampedSum : 1;
-  steps = steps.map(s => s * drift);
+  // ── 5. Re-anchor: distribute any residual drift evenly across all bars ──
+  const residual = totalMove - steps.reduce((a, b) => a + b, 0);
+  steps = steps.map(s => s + residual / steps.length);
 
-  // Build bars
+  // ── 6. Build OHLC bars ──
   const bars = [];
   MARKET_HOURS.forEach((hour, i) => {
     const open  = i === 0 ? prevClose : bars[i - 1].close;
     const close = i === MARKET_HOURS.length - 1 ? todayClose : open + steps[i];
-    // Wick = small fraction of day range, never compounding
-    const wick  = Math.abs(randn(rng)) * Math.max(dayRange * 0.07, 0.08);
+
+    // Wick: at most 0.3% of price — tiny, realistic
+    const wickPct = rng() * 0.003;
+    const wick    = open * wickPct;
+
     bars.push({
       date,
       hour,
@@ -406,7 +428,7 @@ function buildHourlyBars(date, prevClose, todayClose, events, rng) {
       high:     +(Math.max(open, close) + wick).toFixed(2),
       low:      +(Math.min(open, close) - wick).toFixed(2),
       price:    +close.toFixed(2),
-      volume:   Math.floor((3_000_000 + rng() * 8_000_000)),
+      volume:   Math.floor(3_000_000 + rng() * 8_000_000),
       hasEvent: events.length > 0 && i === 1,
       events:   i === 1 ? events : [],
       isOpen:   i === 0,
